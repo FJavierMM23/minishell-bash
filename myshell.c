@@ -193,7 +193,7 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
     {
         if (indice == 0)
         {
-            setpgid(0, 0); /* primer proceso crea grupo */
+            setpgid(0, 0);
         }
         else
         {
@@ -204,7 +204,7 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
     {
         if (indice == 0)
         {
-            pgid_pipeline = pid; /* guardar el pgid */
+            pgid_pipeline = pid;
             setpgid(pid, pid);
         }
         else
@@ -213,18 +213,6 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
         }
         return pid;
     }
-    /*
-    if (pid == 0)
-    {
-        setpgid(0, 0); // el hijo crea su propio grupo
-    }
-    else
-    {
-        setpgid(pid, pid); // el padre lo confirma para evitar race condition
-        return pid;
-    }
-    */
-
     signal(SIGINT, SIG_DFL);
     signal(SIGQUIT, SIG_DFL);
     signal(SIGTSTP, SIG_DFL);
@@ -300,13 +288,13 @@ void lanzar_hijos(tline *linea, int *fds, int npipes, pid_t *pids)
     }
 }
 
-void wait_hijos(pid_t *pids, int num_jobs_wait)
+void wait_hijos(pid_t *pids, int n)
 {
     int i;
     int status;
     int ret;
 
-    for (i = 0; i < num_jobs_wait; i++)
+    for (i = 0; i < n; i++)
     {
         if (pids[i] > 0)
         {
@@ -382,23 +370,8 @@ void ejecutar_pipeline(tline *linea, const char *comando)
     }
     else
     {
-        int status;
-        pid_t ret;
-
         tcsetpgrp(STDIN_FILENO, pgid_pipeline);
-
         wait_hijos(pids_hijos, num_comandos);
-
-        // 🔥 comprobar si se ha parado el grupo
-        ret = waitpid(-pgid_pipeline, &status, WNOHANG | WUNTRACED);
-
-        if (ret > 0 && WIFSTOPPED(status))
-        {
-            agregar_job(pgid_pipeline, comando);
-            jobs[num_jobs - 1].estado = STOPPED;
-            printf("\n[%d]+ Stopped\t%s\n", jobs[num_jobs - 1].job_id, comando);
-        }
-
         tcsetpgrp(STDIN_FILENO, getpgrp());
     }
 
@@ -477,27 +450,6 @@ void cmd_jobs(void)
     for (i = 0; i < num_jobs; i++)
     {
         char *estado = (jobs[i].estado == RUNNING) ? "Running" : "Stopped";
-
-        /*
-        ret = waitpid(jobs[i].pid, &status, WNOHANG | WUNTRACED | WCONTINUED);
-
-        if (ret == 0)
-        {
-            estado = "Running";
-        }
-        else if (ret > 0)
-        {
-            if (WIFSTOPPED(status))
-            {
-                estado = "Stopped";
-            }
-            else if (WIFCONTINUED(status))
-            {
-                estado = "Running";
-            }
-        }
-        */
-
         printf("[%d]+ %s\t%s\n", jobs[i].job_id, estado, jobs[i].linea);
     }
 }
@@ -562,7 +514,19 @@ void cmd_fg(tcommand *cmd)
     }
 
     tcsetpgrp(STDIN_FILENO, getpgrp());
-    eliminar_job(id_job_encontrado);
+
+    if (WIFSTOPPED(status))
+    {
+        /* El proceso se pausó (Ctrl+Z): queda en la lista como STOPPED */
+        jobs[id_job_encontrado].estado = STOPPED;
+        printf("\n[%d]+ Stopped\t%s\n",
+               jobs[id_job_encontrado].job_id,
+               jobs[id_job_encontrado].linea);
+    }
+    else
+    {
+        eliminar_job(id_job_encontrado);
+    }
 }
 
 void agregar_job(pid_t pid, const char *texto)
@@ -600,13 +564,5 @@ void eliminar_job(int id)
     {
         free(jobs);
         jobs = NULL;
-    }
-    else
-    {
-        tjob *tmp = realloc(jobs, num_jobs * sizeof(tjob));
-        if (tmp != NULL)
-        {
-            jobs = tmp;
-        }
     }
 }
