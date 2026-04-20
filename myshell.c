@@ -24,7 +24,9 @@
 typedef struct
 {
     int job_id;
-    pid_t pid;
+    pid_t pgid;
+    pid_t *pids;
+    int npids;
     char linea[MAX_LINE];
     int estado;
 } tjob;
@@ -45,7 +47,7 @@ void ejecutar_pipeline(tline *linea, const char *texto);
 void cmd_cd(tcommand *cmd);
 void cmd_jobs(void);
 void cmd_fg(tcommand *cmd);
-void agregar_job(pid_t pid, const char *texto);
+void agregar_job(pid_t pgid, pid_t *pids, int npids, const char *texto);
 void eliminar_job(int pos);
 
 int main(void)
@@ -313,6 +315,8 @@ void ejecutar_pipeline(tline *linea, const char *comando)
     int num_pipes;
     int *array_pipes;
     pid_t *pids_hijos;
+    int status;
+    pid_t ret;
 
     num_comandos = linea->ncommands;
     num_pipes = num_comandos - 1;
@@ -331,7 +335,7 @@ void ejecutar_pipeline(tline *linea, const char *comando)
         {
             if (linea->background)
             {
-                agregar_job(pids_hijos[0], comando);
+                agregar_job(pids_hijos[0], pids_hijos, 1, comando);
                 printf("[%d] %d\n", jobs[num_jobs - 1].job_id, pids_hijos[0]);
             }
             else
@@ -365,13 +369,22 @@ void ejecutar_pipeline(tline *linea, const char *comando)
 
     if (linea->background)
     {
-        agregar_job(pids_hijos[num_comandos - 1], comando);
-        printf("[%d] %d\n", jobs[num_jobs - 1].job_id, pids_hijos[num_comandos - 1]);
+        agregar_job(pgid_pipeline, pids_hijos, num_comandos, comando);
+        printf("[%d] %d\n", jobs[num_jobs - 1].job_id, pgid_pipeline);
     }
     else
     {
         tcsetpgrp(STDIN_FILENO, pgid_pipeline);
         wait_hijos(pids_hijos, num_comandos);
+        ret = waitpid(-pgid_pipeline, &status, WNOHANG | WUNTRACED);
+
+        if (ret > 0 && WIFSTOPPED(status))
+        {
+            agregar_job(pgid_pipeline, pids_hijos, num_comandos, comando);
+            jobs[num_jobs - 1].estado = STOPPED;
+            printf("\n[%d]+ Stopped\t%s\n", jobs[num_jobs - 1].job_id, comando);
+        }
+
         tcsetpgrp(STDIN_FILENO, getpgrp());
     }
 
@@ -413,44 +426,65 @@ void cmd_cd(tcommand *cmd)
 void cmd_jobs(void)
 {
     int i;
+    int j;
     int status;
     int ret;
-
+    int todos_terminados;
+ 
     i = 0;
     while (i < num_jobs)
     {
-        ret = waitpid(jobs[i].pid, &status, WNOHANG | WUNTRACED | WCONTINUED);
-        if (ret > 0)
+        todos_terminados = 1;
+ 
+        for (j = 0; j < jobs[i].npids; j++)
         {
-            if (WIFEXITED(status) || WIFSIGNALED(status))
+            if (jobs[i].pids[j] <= 0)
             {
-                eliminar_job(i);
                 continue;
             }
-            else if (WIFSTOPPED(status))
+ 
+            ret = waitpid(jobs[i].pids[j], &status, WNOHANG | WUNTRACED | WCONTINUED);
+            if (ret > 0)
             {
-                jobs[i].estado = STOPPED;
+                if (WIFEXITED(status) || WIFSIGNALED(status))
+                {
+                    jobs[i].pids[j] = -1; /* marcar como terminado */
+                }
+                else if (WIFSTOPPED(status))
+                {
+                    jobs[i].estado = STOPPED;
+                    todos_terminados = 0;
+                }
+                else if (WIFCONTINUED(status))
+                {
+                    jobs[i].estado = RUNNING;
+                    todos_terminados = 0;
+                }
             }
-            else if (WIFCONTINUED(status))
+            else
             {
-                jobs[i].estado = RUNNING;
+                if (ret < 0 && errno != ECHILD)
+                {
+                    fprintf(stderr, "waitpid: %s\n", strerror(errno));
+                }
+                if (ret == 0)
+                {
+                    todos_terminados = 0; /* sigue vivo */
+                }
             }
-            i++;
+        }
+ 
+        if (todos_terminados)
+        {
+            eliminar_job(i);
         }
         else
         {
-            if (ret < 0)
-            {
-                fprintf(stderr, "waitpid: %s\n", strerror(errno));
-            }
+            printf("[%d]+ %s\t%s\n", jobs[i].job_id,
+                   (jobs[i].estado == RUNNING) ? "Running" : "Stopped",
+                   jobs[i].linea);
             i++;
         }
-    }
-
-    for (i = 0; i < num_jobs; i++)
-    {
-        char *estado = (jobs[i].estado == RUNNING) ? "Running" : "Stopped";
-        printf("[%d]+ %s\t%s\n", jobs[i].job_id, estado, jobs[i].linea);
     }
 }
 
@@ -462,7 +496,7 @@ void cmd_fg(tcommand *cmd)
     int ret;
     long id_solicitado;
     char *ptr_validacion;
-
+ 
     if (cmd->argc == 1)
     {
         if (num_jobs == 0)
@@ -480,7 +514,7 @@ void cmd_fg(tcommand *cmd)
             fprintf(stderr, "fg: %s: argumento no válido\n", cmd->argv[1]);
             return;
         }
-
+ 
         id_job_encontrado = -1;
         for (i = 0; i < num_jobs; i++)
         {
@@ -496,25 +530,27 @@ void cmd_fg(tcommand *cmd)
             return;
         }
     }
-
+ 
     printf("%s\n", jobs[id_job_encontrado].linea);
-
+ 
     /* Ctrl+C llegará al hijo (SIG_DFL), no al shell (SIG_IGN) */
-    tcsetpgrp(STDIN_FILENO, jobs[id_job_encontrado].pid);
-    if (kill(-jobs[id_job_encontrado].pid, SIGCONT) < 0)
+    tcsetpgrp(STDIN_FILENO, jobs[id_job_encontrado].pgid);
+    if (kill(-jobs[id_job_encontrado].pgid, SIGCONT) < 0)
     {
         fprintf(stderr, "kill (SIGCONT): %s\n", strerror(errno));
     }
-
+ 
     jobs[id_job_encontrado].estado = RUNNING;
-    ret = waitpid(-jobs[id_job_encontrado].pid, &status, WUNTRACED);
+ 
+    /* Esperar a todos los procesos del pipeline */
+    ret = waitpid(-jobs[id_job_encontrado].pgid, &status, WUNTRACED);
     if (ret < 0)
     {
         fprintf(stderr, "waitpid: %s\n", strerror(errno));
     }
-
+ 
     tcsetpgrp(STDIN_FILENO, getpgrp());
-
+ 
     if (WIFSTOPPED(status))
     {
         /* El proceso se pausó (Ctrl+Z): queda en la lista como STOPPED */
@@ -529,20 +565,36 @@ void cmd_fg(tcommand *cmd)
     }
 }
 
-void agregar_job(pid_t pid, const char *texto)
+void agregar_job(pid_t pgid, pid_t *pids, int npids, const char *texto)
 {
     tjob *tmp;
-
+    pid_t *copia_pids;
+    int i;
+ 
     tmp = realloc(jobs, (num_jobs + 1) * sizeof(tjob));
     if (tmp == NULL)
     {
         fprintf(stderr, "realloc jobs: %s\n", strerror(errno));
         return;
     }
-
+ 
+    copia_pids = malloc(npids * sizeof(pid_t));
+    if (copia_pids == NULL)
+    {
+        fprintf(stderr, "malloc pids job: %s\n", strerror(errno));
+        return;
+    }
+ 
+    for (i = 0; i < npids; i++)
+    {
+        copia_pids[i] = pids[i];
+    }
+ 
     jobs = tmp;
     jobs[num_jobs].job_id = next_id++;
-    jobs[num_jobs].pid = pid;
+    jobs[num_jobs].pgid = pgid;
+    jobs[num_jobs].pids = copia_pids;
+    jobs[num_jobs].npids = npids;
     strncpy(jobs[num_jobs].linea, texto, MAX_LINE - 1);
     jobs[num_jobs].linea[MAX_LINE - 1] = '\0';
     jobs[num_jobs].estado = RUNNING;
@@ -552,6 +604,8 @@ void agregar_job(pid_t pid, const char *texto)
 void eliminar_job(int id)
 {
     int i;
+
+    free(jobs[id].pids);
 
     for (i = id; i < num_jobs - 1; i++)
     {
