@@ -21,7 +21,6 @@
 #define RUNNING 0
 #define STOPPED 1
 
-
 /*
  * tjob: representa un proceso o pipeline en background.
  * Almacena el id de job, el pgid del grupo de procesos, un array con
@@ -30,19 +29,19 @@
  */
 typedef struct
 {
-    int    job_id;
-    pid_t  pgid;            /* group id = pid del primer proceso del pipeline */
-    pid_t *pids;            /* array con todos los pids del pipeline */
-    int    npids;           /* numero de procesos del pipeline */
-    char   linea[MAX_LINE]; /* texto del comando para mostrarlo en jobs/fg */
-    int    estado;
+    int job_id;
+    pid_t pgid;           /* group id = pid del primer proceso del pipeline */
+    pid_t *pids;          /* array con todos los pids del pipeline */
+    int npids;            /* numero de procesos del pipeline */
+    char linea[MAX_LINE]; /* texto del comando para mostrarlo en jobs/fg */
+    int estado;
 } tjob;
- 
+
 /* Lista global de jobs en background */
-static tjob  *jobs     = NULL;
-static int    num_jobs = 0;
-static int    next_id  = 1;
- 
+static tjob *jobs = NULL;
+static int num_jobs = 0;
+static int next_id = 1;
+
 /*
  * pgid_pipeline: group id del pipeline que se está lanzando en este momento.
  * Se asigna al pid del primer proceso (indice 0) y los demás procesos del
@@ -50,21 +49,21 @@ static int    next_id  = 1;
  * como en el padre (tcsetpgrp) y en agregar_job.
  */
 static pid_t pgid_pipeline = 0;
- 
+
 /* Prototipos */
-int   aplicar_redireccion(const char *fichero, int flags, int fd_destino);
-void  cerrar_pipes(int *fds, int npipes);
-int   crear_pipes(int *fds, int npipes);
+int aplicar_redireccion(const char *fichero, int flags, int fd_destino);
+void cerrar_pipes(int *fds, int npipes);
+int crear_pipes(int *fds, int npipes);
 pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes);
-void  lanzar_hijos(tline *linea, int *fds, int npipes, pid_t *pids);
-void  wait_hijos(pid_t *pids, int n);
-void  ejecutar_pipeline(tline *linea, const char *comando);
-void  cmd_cd(tcommand *cmd);
-void  cmd_jobs(void);
-void  cmd_fg(tcommand *cmd);
-void  agregar_job(pid_t pgid, pid_t *pids, int npids, const char *texto);
-void  eliminar_job(int id);
- 
+void lanzar_hijos(tline *linea, int *fds, int npipes, pid_t *pids);
+void wait_hijos(pid_t *pids, int n);
+void ejecutar_pipeline(tline *linea, const char *comando);
+void cmd_cd(tcommand *cmd);
+void cmd_jobs(void);
+void cmd_fg(tcommand *cmd);
+void agregar_job(pid_t pgid, pid_t *pids, int npids, const char *texto);
+void eliminar_job(int id);
+
 /*
  * main: bucle principal del minishell.
  * Ignora las señales de teclado para que el shell no muera con Ctrl+C,
@@ -73,37 +72,37 @@ void  eliminar_job(int id);
  */
 int main(void)
 {
-    char   comando[MAX_LINE];
+    char comando[MAX_LINE];
     tline *linea_parser;
- 
+
     /* El shell ignora estas señales permanentemente.
      * SIGTTOU y SIGTTIN son necesarias para que tcsetpgrp no bloquee al shell.
      * Los hijos restaurarán SIG_DFL antes de execvp. */
-    signal(SIGINT,  SIG_IGN);
+    signal(SIGINT, SIG_IGN);
     signal(SIGQUIT, SIG_IGN);
     signal(SIGTTOU, SIG_IGN);
     signal(SIGTTIN, SIG_IGN);
     signal(SIGTSTP, SIG_IGN);
- 
+
     while (1)
     {
         printf(PROMPT);
         fflush(stdout);
- 
+
         /* EOF (Ctrl+D): salir limpiamente */
         if (fgets(comando, MAX_LINE, stdin) == NULL)
         {
             printf("\n");
             break;
         }
- 
+
         linea_parser = tokenize(comando);
- 
+
         if (linea_parser == NULL || linea_parser->ncommands == 0)
         {
             continue;
         }
- 
+
         /* Comandos internos: solo disponibles sin pipes */
         if (linea_parser->ncommands == 1)
         {
@@ -127,16 +126,16 @@ int main(void)
                 break;
             }
         }
- 
+
         /* Eliminar el \n que deja fgets antes de guardar el texto en jobs */
         comando[strcspn(comando, "\n")] = '\0';
         ejecutar_pipeline(linea_parser, comando);
     }
- 
+
     free(jobs);
     return 0;
 }
- 
+
 /*
  * aplicar_redireccion: abre un fichero y redirige el descriptor fd_destino
  * hacia él mediante dup2. Se llama desde el proceso hijo antes de execvp.
@@ -146,26 +145,26 @@ int aplicar_redireccion(const char *fichero, int flags, int fd_destino)
 {
     int fd;
     int ret;
- 
+
     fd = open(fichero, flags, 0644);
     if (fd < 0)
     {
         fprintf(stderr, "%s: Error. %s\n", fichero, strerror(errno));
         return -1;
     }
- 
+
     ret = dup2(fd, fd_destino);
     close(fd);
- 
+
     if (ret < 0)
     {
         fprintf(stderr, "dup2: %s\n", strerror(errno));
         return -1;
     }
- 
+
     return 0;
 }
- 
+
 /*
  * cerrar_pipes: cierra todos los extremos del array plano de pipes.
  * fds[i*2] es el extremo de lectura y fds[i*2+1] el de escritura de la pipe i.
@@ -175,18 +174,18 @@ int aplicar_redireccion(const char *fichero, int flags, int fd_destino)
 void cerrar_pipes(int *fds, int npipes)
 {
     int j;
- 
+
     if (fds == NULL || npipes <= 0)
     {
         return;
     }
- 
+
     for (j = 0; j < npipes * 2; j++)
     {
         close(fds[j]);
     }
 }
- 
+
 /*
  * crear_pipes: crea npipes pipes y guarda sus file descriptors en el array
  * plano fds (2 fds por pipe). Si falla alguna, cierra las ya creadas.
@@ -195,7 +194,7 @@ void cerrar_pipes(int *fds, int npipes)
 int crear_pipes(int *fds, int npipes)
 {
     int i;
- 
+
     for (i = 0; i < npipes; i++)
     {
         if (pipe(&fds[i * 2]) < 0)
@@ -210,10 +209,10 @@ int crear_pipes(int *fds, int npipes)
             return -1;
         }
     }
- 
+
     return 0;
 }
- 
+
 /*
  * lanzar_hijo: hace fork y configura el proceso hijo en la posición 'indice'
  * dentro del pipeline. El hijo se mete en el grupo de procesos del pipeline,
@@ -224,25 +223,25 @@ int crear_pipes(int *fds, int npipes)
  */
 pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
 {
-    pid_t     pid;
+    pid_t pid;
     tcommand *cmd;
-    int       ret;
- 
+    int ret;
+
     cmd = &linea->commands[indice];
- 
+
     if (cmd->filename == NULL)
     {
         fprintf(stderr, "%s: No se encuentra el mandato\n", cmd->argv[0]);
         return -1;
     }
- 
+
     pid = fork();
     if (pid < 0)
     {
         fprintf(stderr, "fork: %s\n", strerror(errno));
         return -1;
     }
- 
+
     if (pid == 0)
     {
         /* Proceso hijo: unirse al grupo del pipeline.
@@ -272,16 +271,16 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
         }
         return pid;
     }
- 
+
     /* A partir de aquí solo ejecuta el proceso hijo */
- 
+
     /* Restaurar señales: el hijo debe responder a Ctrl+C, Ctrl+\ y Ctrl+Z */
-    signal(SIGINT,  SIG_DFL);
+    signal(SIGINT, SIG_DFL);
     signal(SIGQUIT, SIG_DFL);
     signal(SIGTSTP, SIG_DFL);
     signal(SIGTTIN, SIG_DFL);
     signal(SIGTTOU, SIG_DFL);
- 
+
     /* Conectar stdin al extremo de lectura de la pipe anterior */
     if (indice > 0)
     {
@@ -292,7 +291,7 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
             exit(EXIT_FAILURE);
         }
     }
- 
+
     /* Conectar stdout al extremo de escritura de la pipe siguiente */
     if (indice < npipes)
     {
@@ -303,10 +302,10 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
             exit(EXIT_FAILURE);
         }
     }
- 
+
     /* Cerrar todos los extremos heredados para que los lectores reciban EOF */
     cerrar_pipes(fds, npipes);
- 
+
     /* Redirección de fichero de entrada (solo el primer mandato del pipeline) */
     if (indice == 0 && linea->redirect_input != NULL)
     {
@@ -315,7 +314,7 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
             exit(EXIT_FAILURE);
         }
     }
- 
+
     /* Redirecciones de salida y error (solo el último mandato del pipeline) */
     if (indice == linea->ncommands - 1)
     {
@@ -338,14 +337,14 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
             }
         }
     }
- 
+
     execvp(cmd->filename, cmd->argv);
- 
+
     /* Si execvp retorna, el mandato no se encontró */
     fprintf(stderr, "%s: No se encuentra el mandato\n", cmd->argv[0]);
     exit(EXIT_FAILURE);
 }
- 
+
 /*
  * lanzar_hijos: lanza todos los mandatos del pipeline en orden y guarda
  * sus pids en el array pids.
@@ -353,13 +352,13 @@ pid_t lanzar_hijo(tline *linea, int indice, int *fds, int npipes)
 void lanzar_hijos(tline *linea, int *fds, int npipes, pid_t *pids)
 {
     int i;
- 
+
     for (i = 0; i < linea->ncommands; i++)
     {
         pids[i] = lanzar_hijo(linea, i, fds, npipes);
     }
 }
- 
+
 /*
  * wait_hijos: espera a que terminen todos los procesos del array pids.
  * Usa WUNTRACED para detectar también si alguno se detiene con Ctrl+Z.
@@ -370,7 +369,7 @@ void wait_hijos(pid_t *pids, int n)
     int i;
     int status;
     int ret;
- 
+
     for (i = 0; i < n; i++)
     {
         if (pids[i] > 0)
@@ -383,7 +382,7 @@ void wait_hijos(pid_t *pids, int n)
         }
     }
 }
- 
+
 /*
  * ejecutar_pipeline: coordina la ejecución de todos los mandatos de la línea.
  * Crea las pipes necesarias, lanza los procesos hijo y, según el modo:
@@ -394,23 +393,23 @@ void wait_hijos(pid_t *pids, int n)
  */
 void ejecutar_pipeline(tline *linea, const char *comando)
 {
-    int    num_comandos;
-    int    num_pipes;
-    int   *array_pipes;
+    int num_comandos;
+    int num_pipes;
+    int *array_pipes;
     pid_t *pids_hijos;
-    int    status;
-    pid_t  ret;
- 
+    int status;
+    pid_t ret;
+
     num_comandos = linea->ncommands;
-    num_pipes    = num_comandos - 1;
- 
+    num_pipes = num_comandos - 1;
+
     pids_hijos = malloc(num_comandos * sizeof(pid_t));
     if (pids_hijos == NULL)
     {
         fprintf(stderr, "malloc pids_hijos: %s\n", strerror(errno));
         return;
     }
- 
+
     /* Caso simple: un solo mandato sin pipes */
     if (num_pipes == 0)
     {
@@ -433,7 +432,7 @@ void ejecutar_pipeline(tline *linea, const char *comando)
         free(pids_hijos);
         return;
     }
- 
+
     /* Caso con pipes: N mandatos conectados */
     array_pipes = malloc(num_pipes * 2 * sizeof(int));
     if (array_pipes == NULL)
@@ -442,19 +441,19 @@ void ejecutar_pipeline(tline *linea, const char *comando)
         free(pids_hijos);
         return;
     }
- 
+
     if (crear_pipes(array_pipes, num_pipes) < 0)
     {
         free(array_pipes);
         free(pids_hijos);
         return;
     }
- 
+
     lanzar_hijos(linea, array_pipes, num_pipes, pids_hijos);
- 
+
     /* El padre cierra todos los extremos para que los hijos reciban EOF */
     cerrar_pipes(array_pipes, num_pipes);
- 
+
     if (linea->background)
     {
         /* Registrar el job con el pgid y todos los pids del pipeline */
@@ -466,7 +465,7 @@ void ejecutar_pipeline(tline *linea, const char *comando)
         /* Ceder el terminal al grupo del pipeline */
         tcsetpgrp(STDIN_FILENO, pgid_pipeline);
         wait_hijos(pids_hijos, num_comandos);
- 
+
         /* Comprobar si el pipeline se detuvo con Ctrl+Z */
         ret = waitpid(-pgid_pipeline, &status, WNOHANG | WUNTRACED);
         if (ret > 0 && WIFSTOPPED(status))
@@ -475,14 +474,14 @@ void ejecutar_pipeline(tline *linea, const char *comando)
             jobs[num_jobs - 1].estado = STOPPED;
             printf("\n[%d]+ Stopped\t%s\n", jobs[num_jobs - 1].job_id, comando);
         }
- 
+
         tcsetpgrp(STDIN_FILENO, getpgrp());
     }
- 
+
     free(array_pipes);
     free(pids_hijos);
 }
- 
+
 /*
  * cmd_cd: comando interno cd. Sin argumentos va al directorio HOME.
  * Imprime la ruta absoluta del nuevo directorio tras el cambio.
@@ -491,8 +490,8 @@ void ejecutar_pipeline(tline *linea, const char *comando)
 void cmd_cd(tcommand *cmd)
 {
     char *destino;
-    char  cwd[MAX_LINE];
- 
+    char cwd[MAX_LINE];
+
     if (cmd->argc == 1)
     {
         destino = getenv("HOME");
@@ -506,19 +505,19 @@ void cmd_cd(tcommand *cmd)
     {
         destino = cmd->argv[1];
     }
- 
+
     if (chdir(destino) < 0)
     {
         fprintf(stderr, "%s: Error. %s\n", destino, strerror(errno));
         return;
     }
- 
+
     if (getcwd(cwd, sizeof(cwd)) != NULL)
     {
         printf("%s\n", cwd);
     }
 }
- 
+
 /*
  * cmd_jobs: comando interno jobs. Recorre la lista de jobs en background
  * y comprueba el estado de cada proceso individual con waitpid(WNOHANG).
@@ -533,12 +532,12 @@ void cmd_jobs(void)
     int status;
     int ret;
     int todos_terminados;
- 
+
     i = 0;
     while (i < num_jobs)
     {
         todos_terminados = 1;
- 
+
         /* Comprobar el estado de cada proceso del pipeline individualmente */
         for (j = 0; j < jobs[i].npids; j++)
         {
@@ -547,7 +546,7 @@ void cmd_jobs(void)
                 /* Proceso ya marcado como terminado en una llamada anterior */
                 continue;
             }
- 
+
             ret = waitpid(jobs[i].pids[j], &status, WNOHANG | WUNTRACED | WCONTINUED);
             if (ret > 0)
             {
@@ -578,7 +577,7 @@ void cmd_jobs(void)
                 }
             }
         }
- 
+
         if (todos_terminados)
         {
             eliminar_job(i); /* no incrementar i: el siguiente ocupa la misma posición */
@@ -592,7 +591,7 @@ void cmd_jobs(void)
         }
     }
 }
- 
+
 /*
  * cmd_fg: comando interno fg. Trae al foreground el job indicado por número,
  * o el último si no se especifica ninguno. Cede el terminal al grupo de
@@ -602,13 +601,13 @@ void cmd_jobs(void)
  */
 void cmd_fg(tcommand *cmd)
 {
-    int   id_job_encontrado;
-    int   i;
-    int   status;
-    int   ret;
-    long  id_solicitado;
+    int id_job_encontrado;
+    int i;
+    int status;
+    int ret;
+    long id_solicitado;
     char *ptr_validacion;
- 
+
     if (cmd->argc == 1)
     {
         if (num_jobs == 0)
@@ -627,7 +626,7 @@ void cmd_fg(tcommand *cmd)
             fprintf(stderr, "fg: %s: argumento no válido\n", cmd->argv[1]);
             return;
         }
- 
+
         id_job_encontrado = -1;
         for (i = 0; i < num_jobs; i++)
         {
@@ -643,9 +642,9 @@ void cmd_fg(tcommand *cmd)
             return;
         }
     }
- 
+
     printf("%s\n", jobs[id_job_encontrado].linea);
- 
+
     /* Ceder el terminal al grupo del job: Ctrl+C llegará al hijo (SIG_DFL),
      * no al shell (SIG_IGN). Enviar SIGCONT a todo el grupo para reanudarlo. */
     tcsetpgrp(STDIN_FILENO, jobs[id_job_encontrado].pgid);
@@ -653,19 +652,19 @@ void cmd_fg(tcommand *cmd)
     {
         fprintf(stderr, "kill (SIGCONT): %s\n", strerror(errno));
     }
- 
+
     jobs[id_job_encontrado].estado = RUNNING;
- 
+
     /* Esperar a cualquier proceso del grupo (WUNTRACED detecta Ctrl+Z) */
     ret = waitpid(-jobs[id_job_encontrado].pgid, &status, WUNTRACED);
     if (ret < 0)
     {
         fprintf(stderr, "waitpid: %s\n", strerror(errno));
     }
- 
+
     /* Recuperar el control del terminal para el shell */
     tcsetpgrp(STDIN_FILENO, getpgrp());
- 
+
     if (WIFSTOPPED(status))
     {
         /* El proceso se pausó con Ctrl+Z: queda en la lista como STOPPED */
@@ -679,7 +678,7 @@ void cmd_fg(tcommand *cmd)
         eliminar_job(id_job_encontrado);
     }
 }
- 
+
 /*
  * agregar_job: añade un nuevo job al array dinámico global.
  * Copia el array de pids para que el job tenga su propia copia independiente
@@ -688,40 +687,40 @@ void cmd_fg(tcommand *cmd)
  */
 void agregar_job(pid_t pgid, pid_t *pids, int npids, const char *texto)
 {
-    tjob  *tmp;
+    tjob *tmp;
     pid_t *copia_pids;
-    int    i;
- 
+    int i;
+
     tmp = realloc(jobs, (num_jobs + 1) * sizeof(tjob));
     if (tmp == NULL)
     {
         fprintf(stderr, "realloc jobs: %s\n", strerror(errno));
         return;
     }
- 
+
     copia_pids = malloc(npids * sizeof(pid_t));
     if (copia_pids == NULL)
     {
         fprintf(stderr, "malloc pids job: %s\n", strerror(errno));
         return;
     }
- 
+
     for (i = 0; i < npids; i++)
     {
         copia_pids[i] = pids[i];
     }
- 
-    jobs                    = tmp;
-    jobs[num_jobs].job_id   = next_id++;
-    jobs[num_jobs].pgid     = pgid;
-    jobs[num_jobs].pids     = copia_pids;
-    jobs[num_jobs].npids    = npids;
-    jobs[num_jobs].estado   = RUNNING;
+
+    jobs = tmp;
+    jobs[num_jobs].job_id = next_id++;
+    jobs[num_jobs].pgid = pgid;
+    jobs[num_jobs].pids = copia_pids;
+    jobs[num_jobs].npids = npids;
+    jobs[num_jobs].estado = RUNNING;
     strncpy(jobs[num_jobs].linea, texto, MAX_LINE - 1);
     jobs[num_jobs].linea[MAX_LINE - 1] = '\0';
     num_jobs++;
 }
- 
+
 /*
  * eliminar_job: elimina el job en la posición id de la lista global.
  * Libera el array de pids del job antes de desplazar los siguientes
@@ -730,16 +729,16 @@ void agregar_job(pid_t pgid, pid_t *pids, int npids, const char *texto)
 void eliminar_job(int id)
 {
     int i;
- 
+
     free(jobs[id].pids);
- 
+
     for (i = id; i < num_jobs - 1; i++)
     {
         jobs[i] = jobs[i + 1];
     }
- 
+
     num_jobs--;
- 
+
     if (num_jobs == 0)
     {
         free(jobs);
